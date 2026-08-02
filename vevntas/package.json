@@ -3,12 +3,12 @@
   "version": "0.2.0",
   "private": true,
   "scripts": {
-    "dev": "node scripts/prepare-source.mjs && next dev",
-    "postinstall": "node scripts/prepare-source.mjs",
-    "build": "node scripts/prepare-source.mjs && next build",
+    "dev": "node scripts/rebuild-source.mjs && next dev",
+    "postinstall": "node scripts/rebuild-source.mjs",
+    "build": "node scripts/rebuild-source.mjs && next build",
     "start": "next start",
-    "lint": "node scripts/prepare-source.mjs && eslint .",
-    "typecheck": "node scripts/prepare-source.mjs && tsc --noEmit",
+    "lint": "node scripts/rebuild-source.mjs && eslint .",
+    "typecheck": "node scripts/rebuild-source.mjs && tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
