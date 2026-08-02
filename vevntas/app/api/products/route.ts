@@ -24,7 +24,8 @@ export async function GET(request: NextRequest) {
     const { data, error } = await query;
     if (error) throw error;
 
-    const products = (data ?? []).map((row: Record<string, unknown>) => {
+    const rows = (data ?? []) as unknown as Record<string, unknown>[];
+    const products = rows.map((row) => {
       const relation = row.product_costs as { purchase_price_usd?: number | string } | { purchase_price_usd?: number | string }[] | undefined;
       const cost = Array.isArray(relation) ? relation[0]?.purchase_price_usd : relation?.purchase_price_usd;
       return {
