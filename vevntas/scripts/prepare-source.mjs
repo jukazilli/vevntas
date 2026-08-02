@@ -2,7 +2,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 const generated = [
-  { prefix: "VevntasApp.safe.part", target: "components/VevntasApp.tsx", binary: false },
+  { prefix: "VevntasApp.tsx.part", target: "components/VevntasApp.tsx", binary: false },
   { prefix: "globals.css.part", target: "app/globals.css", binary: false },
   { prefix: "template.xlsx.part", target: "public/Modelo_Importacao_Produtos_Vevntas.xlsx", binary: true },
 ];
