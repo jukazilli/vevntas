@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { usdToVes, vesToUsd } from "@/lib/money";
+import { lineTotal, parseLocaleNumber, truncMoney, usdToVes } from "@/lib/money";
 
-describe("currency conversion", () => {
-  it("converts USD to VES with two decimals", () => {
-    expect(usdToVes(10, 36.5)).toBe(365);
-    expect(usdToVes(1.234, 36.5)).toBe(45.04);
+describe("money helpers", () => {
+  it("parses Venezuelan and international decimal formats", () => {
+    expect(parseLocaleNumber("7.938,9883")).toBeCloseTo(7938.9883);
+    expect(parseLocaleNumber("7938.9883")).toBeCloseTo(7938.9883);
+    expect(parseLocaleNumber("12,834")).toBeCloseTo(12.834);
   });
 
-  it("converts VES to USD safely", () => {
-    expect(vesToUsd(365, 36.5)).toBe(10);
-    expect(vesToUsd(100, 0)).toBe(0);
+  it("truncates accounting values instead of rounding sales", () => {
+    expect(lineTotal(12.834, 7938.9883)).toBe(101888.97);
+    expect(truncMoney(10.999)).toBe(10.99);
+    expect(usdToVes(12.834, 7938.9883)).toBe(101888.97);
   });
 });

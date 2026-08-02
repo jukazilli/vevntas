@@ -1,13 +1,15 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
+  isSupabaseConfigured as hasSupabaseConfiguration,
   SUPABASE_PUBLISHABLE_KEY,
   SUPABASE_URL,
-  isSupabaseConfigured,
 } from "@/lib/supabase/config";
 
 let browserClient: SupabaseClient | undefined;
 
-export { isSupabaseConfigured };
+export function isSupabaseConfigured(): boolean {
+  return hasSupabaseConfiguration();
+}
 
 export function getBrowserSupabase(): SupabaseClient {
   if (!isSupabaseConfigured()) {
@@ -21,6 +23,5 @@ export function getBrowserSupabase(): SupabaseClient {
       detectSessionInUrl: true,
     },
   });
-
   return browserClient;
 }

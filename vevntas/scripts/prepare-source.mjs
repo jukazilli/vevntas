@@ -1,15 +1,19 @@
-import fs from "node:fs";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
-const componentPath = "components/VevntasApp.tsx";
-const source = fs.readFileSync(componentPath, "utf8");
-const patched = source.replace(
-  'from "read-excel-file/browser"',
-  'from "read-excel-file"',
-);
+const generated = [
+  { prefix: "VevntasApp.tsx.part", target: "components/VevntasApp.tsx", binary: false },
+  { prefix: "globals.css.part", target: "app/globals.css", binary: false },
+  { prefix: "template.xlsx.part", target: "public/Modelo_Importacao_Produtos_Vevntas.xlsx", binary: true },
+];
 
-if (patched === source && !source.includes('from "read-excel-file"')) {
-  throw new Error("No fue posible localizar el importador XLSX para preparar el build.");
+const files = await readdir("source-parts");
+for (const item of generated) {
+  const parts = files.filter((file) => file.startsWith(item.prefix)).sort();
+  if (!parts.length) throw new Error(`Missing generated source parts for ${item.target}`);
+  const encoded = (await Promise.all(parts.map((file) => readFile(join("source-parts", file), "utf8")))).join("");
+  const decoded = Buffer.from(encoded, "base64");
+  await mkdir(dirname(item.target), { recursive: true });
+  await writeFile(item.target, item.binary ? decoded : decoded.toString("utf8"));
 }
-
-fs.writeFileSync(componentPath, patched);
-console.log("Prepared Vevntas source for the current Next.js bundler.");
+console.log("Prepared generated Vevntas sources and import template.");

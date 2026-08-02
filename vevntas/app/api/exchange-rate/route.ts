@@ -21,25 +21,40 @@ function refreshIntervalMs(): number {
   return minutes * 60_000;
 }
 
-function needsAutomaticRefresh(rate: StoredRate | null): boolean {
-  if (!rate || rate.is_manual) return true;
+function isStale(rate: StoredRate | null): boolean {
+  if (!rate) return true;
   const fetchedAt = rate.fetched_at ? new Date(rate.fetched_at).getTime() : 0;
   return !Number.isFinite(fetchedAt) || Date.now() - fetchedAt >= refreshIntervalMs();
 }
 
-function normalizeStoredRate(rate: StoredRate | null) {
+function normalize(rate: StoredRate | null, mode: "automatic" | "manual") {
   return rate
-    ? { ...rate, rate: Number(rate.rate) }
-    : { rate: null, source: "Sin configurar", reference_at: null, fetched_at: null, is_manual: false };
+    ? { ...rate, rate: Number(rate.rate), mode }
+    : { rate: null, source: "Sin configurar", reference_at: null, fetched_at: null, is_manual: mode === "manual", mode };
+}
+
+async function latestByType(
+  supabase: Awaited<ReturnType<typeof requireUserAndProfile>>["supabase"],
+  storeId: string,
+  manual: boolean,
+): Promise<StoredRate | null> {
+  const { data, error } = await supabase
+    .from("exchange_rates")
+    .select(RATE_COLUMNS)
+    .eq("store_id", storeId)
+    .eq("is_manual", manual)
+    .order("fetched_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as StoredRate | null) ?? null;
 }
 
 function validateAutomaticChange(current: StoredRate | null, quote: OfficialExchangeRate) {
-  if (!current || current.is_manual) return;
-
+  if (!current) return;
   const currentValue = Number(current.rate);
   const currentAge = current.fetched_at ? Date.now() - new Date(current.fetched_at).getTime() : Number.POSITIVE_INFINITY;
   if (!Number.isFinite(currentValue) || currentValue <= 0 || currentAge > 24 * 60 * 60 * 1_000) return;
-
   const ratio = quote.rate / currentValue;
   if (ratio < 0.65 || ratio > 1.35) {
     throw new Error("La nueva cotización varía más de 35% frente a la tasa automática vigente y fue bloqueada por seguridad.");
@@ -54,7 +69,6 @@ async function insertAutomaticRate(
 ) {
   const quote = await fetchOfficialExchangeRate();
   validateAutomaticChange(current, quote);
-
   const { data, error } = await supabase
     .from("exchange_rates")
     .insert({
@@ -67,51 +81,39 @@ async function insertAutomaticRate(
     })
     .select(RATE_COLUMNS)
     .single();
-
   if (error) throw error;
   return data as StoredRate;
-}
-
-async function getCurrentRate(
-  supabase: Awaited<ReturnType<typeof requireUserAndProfile>>["supabase"],
-  storeId: string,
-): Promise<StoredRate | null> {
-  const { data, error } = await supabase
-    .from("exchange_rates")
-    .select(RATE_COLUMNS)
-    .eq("store_id", storeId)
-    .order("fetched_at", { ascending: false })
-    .order("reference_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) throw error;
-  return (data as StoredRate | null) ?? null;
 }
 
 export async function GET(request: NextRequest) {
   try {
     const { supabase, profile, user } = await requireUserAndProfile(request);
-    let current = await getCurrentRate(supabase, profile.store_id);
+    const { data: store, error: storeError } = await supabase
+      .from("stores")
+      .select("exchange_rate_mode")
+      .eq("id", profile.store_id)
+      .single();
+    if (storeError) throw storeError;
+    const mode = (store?.exchange_rate_mode === "manual" ? "manual" : "automatic") as "automatic" | "manual";
+
+    let automatic = await latestByType(supabase, profile.store_id, false);
+    const manual = await latestByType(supabase, profile.store_id, true);
     let refreshError: string | null = null;
     let refreshed = false;
 
-    if (profile.role === "admin" && needsAutomaticRefresh(current)) {
+    if (mode === "automatic" && profile.role === "admin" && isStale(automatic)) {
       try {
-        current = await insertAutomaticRate(supabase, profile.store_id, user.id, current);
+        automatic = await insertAutomaticRate(supabase, profile.store_id, user.id, automatic);
         refreshed = true;
-      } catch (automaticError) {
-        refreshError = automaticError instanceof Error ? automaticError.message : "No fue posible actualizar la cotización.";
+      } catch (error) {
+        refreshError = error instanceof Error ? error.message : "No fue posible actualizar la cotización oficial.";
       }
     }
 
+    const selected = mode === "manual" ? manual ?? automatic : automatic ?? manual;
     return NextResponse.json({
-      data: normalizeStoredRate(current),
-      automatic_refresh: {
-        enabled: true,
-        refreshed,
-        stale: needsAutomaticRefresh(current),
-        warning: refreshError,
-      },
+      data: normalize(selected, mode),
+      automatic_refresh: { enabled: mode === "automatic", refreshed, stale: isStale(automatic), warning: refreshError },
     });
   } catch (error) {
     if (error instanceof Response) return error;
@@ -122,35 +124,21 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const { supabase, profile, user } = await requireUserAndProfile(request);
-    if (profile.role !== "admin") {
-      return NextResponse.json({ error: "Solo el administrador puede configurar la tasa." }, { status: 403 });
-    }
-
-    const body = (await request.json()) as {
-      mode?: "auto" | "manual";
-      rate?: number;
-      source?: string;
-      reference_at?: string;
-    };
+    if (profile.role !== "admin") return NextResponse.json({ error: "Solo el administrador puede configurar la tasa." }, { status: 403 });
+    const body = (await request.json()) as { mode?: "auto" | "manual"; rate?: number; source?: string; reference_at?: string };
 
     if (body.mode === "auto") {
-      const current = await getCurrentRate(supabase, profile.store_id);
+      const current = await latestByType(supabase, profile.store_id, false);
       try {
         const data = await insertAutomaticRate(supabase, profile.store_id, user.id, current);
-        return NextResponse.json({ data: normalizeStoredRate(data) }, { status: 201 });
-      } catch (automaticError) {
-        return NextResponse.json(
-          { error: automaticError instanceof Error ? automaticError.message : "No fue posible actualizar la cotización." },
-          { status: 502 },
-        );
+        return NextResponse.json({ data: normalize(data, "automatic") }, { status: 201 });
+      } catch (error) {
+        return NextResponse.json({ error: error instanceof Error ? error.message : "No fue posible actualizar la cotización." }, { status: 502 });
       }
     }
 
     const rate = Number(body.rate);
-    if (!Number.isFinite(rate) || rate <= 0) {
-      return NextResponse.json({ error: "La tasa debe ser mayor que cero." }, { status: 400 });
-    }
-
+    if (!Number.isFinite(rate) || rate <= 0) return NextResponse.json({ error: "La tasa debe ser mayor que cero." }, { status: 400 });
     const { data, error } = await supabase
       .from("exchange_rates")
       .insert({
@@ -164,8 +152,7 @@ export async function POST(request: NextRequest) {
       .select(RATE_COLUMNS)
       .single();
     if (error) throw error;
-
-    return NextResponse.json({ data: normalizeStoredRate(data as StoredRate) }, { status: 201 });
+    return NextResponse.json({ data: normalize(data as StoredRate, "manual") }, { status: 201 });
   } catch (error) {
     if (error instanceof Response) return error;
     return NextResponse.json({ error: error instanceof Error ? error.message : "Error inesperado" }, { status: 500 });
