@@ -33,10 +33,23 @@ for (const item of generated) {
     let text = decoded.toString("utf8");
 
     if (item.target === "components/VevntasApp.tsx") {
-      const saleStart = text.indexOf("function SaleView");
-      const productsStart = text.indexOf("function ProductsView");
+      const markers = [
+        "function PriceView",
+        "function SaleView",
+        "function PurchasesView",
+        "function ProductsView",
+        "function InventoryView",
+        "function ImportView",
+        "function SettingsView",
+        "export function VevntasApp",
+      ];
+      const positions = Object.fromEntries(markers.map((marker) => [marker, text.indexOf(marker)]));
+      console.log("Frontend marker positions:", JSON.stringify(positions));
+
+      const saleStart = positions["function SaleView"];
+      const productsStart = positions["function ProductsView"];
       if (saleStart < 0 || productsStart <= saleStart) {
-        throw new Error("Could not locate stable frontend boundaries for repair.");
+        throw new Error(`Could not locate stable frontend boundaries: ${JSON.stringify(positions)}`);
       }
       text = text.slice(0, saleStart) + cleanSaleView + cleanPurchasesView + text.slice(productsStart);
     }
