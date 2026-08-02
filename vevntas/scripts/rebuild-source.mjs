@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+const EXPECTED_APP_SHA256 = "4895077f9f88924b3ede90251f06c9aeb5e29c6922e61b648d7724754b2d729f";
 const legacyScript = await readFile("scripts/prepare-source.mjs", "utf8");
 
 function extractBase64(name) {
@@ -11,6 +13,15 @@ function extractBase64(name) {
 
 const cleanSaleView = extractBase64("saleViewBase64");
 const cleanPurchasesView = extractBase64("purchasesViewBase64");
+const files = await readdir("source-parts");
+const tailParts = files.filter((file) => file.startsWith("VevntasApp.tail.part")).sort();
+if (tailParts.length !== 5) {
+  throw new Error(`Expected 5 validated frontend tail fragments, found ${tailParts.length}.`);
+}
+const cleanTail = Buffer.from(
+  (await Promise.all(tailParts.map((file) => readFile(join("source-parts", file), "utf8")))).join(""),
+  "base64",
+).toString("utf8");
 
 const generated = [
   { prefix: "VevntasApp.tsx.part", target: "components/VevntasApp.tsx", binary: false },
@@ -18,7 +29,6 @@ const generated = [
   { prefix: "template.xlsx.part", target: "public/Modelo_Importacao_Produtos_Vevntas.xlsx", binary: true },
 ];
 
-const files = await readdir("source-parts");
 for (const item of generated) {
   const parts = files.filter((file) => file.startsWith(item.prefix)).sort();
   if (!parts.length) throw new Error(`Missing generated source parts for ${item.target}`);
@@ -33,25 +43,13 @@ for (const item of generated) {
     let text = decoded.toString("utf8");
 
     if (item.target === "components/VevntasApp.tsx") {
-      const markers = [
-        "function PriceView",
-        "function SaleView",
-        "function PurchasesView",
-        "function ProductsView",
-        "function InventoryView",
-        "function ImportView",
-        "function SettingsView",
-        "export function VevntasApp",
-      ];
-      const positions = Object.fromEntries(markers.map((marker) => [marker, text.indexOf(marker)]));
-      console.log("Frontend marker positions:", JSON.stringify(positions));
-
-      const saleStart = positions["function SaleView"];
-      const productsStart = positions["function ProductsView"];
-      if (saleStart < 0 || productsStart <= saleStart) {
-        throw new Error(`Could not locate stable frontend boundaries: ${JSON.stringify(positions)}`);
+      const saleStart = text.indexOf("function SaleView");
+      if (saleStart < 0) throw new Error("Could not locate the stable SaleView boundary.");
+      text = text.slice(0, saleStart) + cleanSaleView + cleanPurchasesView + cleanTail;
+      const digest = createHash("sha256").update(text, "utf8").digest("hex");
+      if (digest !== EXPECTED_APP_SHA256) {
+        throw new Error(`Frontend integrity check failed: expected ${EXPECTED_APP_SHA256}, received ${digest}.`);
       }
-      text = text.slice(0, saleStart) + cleanSaleView + cleanPurchasesView + text.slice(productsStart);
     }
 
     if (text.includes("\uFFFD") || /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/u.test(text)) {
@@ -64,4 +62,4 @@ for (const item of generated) {
   await writeFile(item.target, output);
 }
 
-console.log("Rebuilt validated Vevntas sources with repaired sale and purchase views.");
+console.log("Rebuilt Vevntas sources with verified frontend integrity.");
