@@ -21,8 +21,8 @@ function refreshIntervalMs(): number {
   return minutes * 60_000;
 }
 
-function isStale(rate: StoredRate | null): boolean {
-  if (!rate) return true;
+function needsAutomaticRefresh(rate: StoredRate | null): boolean {
+  if (!rate || rate.is_manual) return true;
   const fetchedAt = rate.fetched_at ? new Date(rate.fetched_at).getTime() : 0;
   return !Number.isFinite(fetchedAt) || Date.now() - fetchedAt >= refreshIntervalMs();
 }
@@ -72,24 +72,30 @@ async function insertAutomaticRate(
   return data as StoredRate;
 }
 
+async function getCurrentRate(
+  supabase: Awaited<ReturnType<typeof requireUserAndProfile>>["supabase"],
+  storeId: string,
+): Promise<StoredRate | null> {
+  const { data, error } = await supabase
+    .from("exchange_rates")
+    .select(RATE_COLUMNS)
+    .eq("store_id", storeId)
+    .order("fetched_at", { ascending: false })
+    .order("reference_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as StoredRate | null) ?? null;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { supabase, profile, user } = await requireUserAndProfile(request);
-    const { data: currentData, error } = await supabase
-      .from("exchange_rates")
-      .select(RATE_COLUMNS)
-      .eq("store_id", profile.store_id)
-      .order("reference_at", { ascending: false })
-      .order("fetched_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error) throw error;
-
-    let current = (currentData as StoredRate | null) ?? null;
+    let current = await getCurrentRate(supabase, profile.store_id);
     let refreshError: string | null = null;
     let refreshed = false;
 
-    if (profile.role === "admin" && isStale(current)) {
+    if (profile.role === "admin" && needsAutomaticRefresh(current)) {
       try {
         current = await insertAutomaticRate(supabase, profile.store_id, user.id, current);
         refreshed = true;
@@ -103,7 +109,7 @@ export async function GET(request: NextRequest) {
       automatic_refresh: {
         enabled: true,
         refreshed,
-        stale: isStale(current),
+        stale: needsAutomaticRefresh(current),
         warning: refreshError,
       },
     });
@@ -128,23 +134,9 @@ export async function POST(request: NextRequest) {
     };
 
     if (body.mode === "auto") {
-      const { data: currentData, error: currentError } = await supabase
-        .from("exchange_rates")
-        .select(RATE_COLUMNS)
-        .eq("store_id", profile.store_id)
-        .order("reference_at", { ascending: false })
-        .order("fetched_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (currentError) throw currentError;
-
+      const current = await getCurrentRate(supabase, profile.store_id);
       try {
-        const data = await insertAutomaticRate(
-          supabase,
-          profile.store_id,
-          user.id,
-          (currentData as StoredRate | null) ?? null,
-        );
+        const data = await insertAutomaticRate(supabase, profile.store_id, user.id, current);
         return NextResponse.json({ data: normalizeStoredRate(data) }, { status: 201 });
       } catch (automaticError) {
         return NextResponse.json(
